@@ -1,7 +1,0 @@
-# Jangan upload secrets ke GitHub!
-.streamlit/secrets.toml
-
-# File temporary
-*.pyc
-__pycache__/
-.DS_Store

@@ -1,0 +1,26 @@
+# Jangan upload secrets ke GitHub!
+.streamlit/secrets.toml
+
+# Virtual environment — JANGAN diupload!
+venv/
+env/
+.env/
+.venv/
+ENV/
+
+# File temporary Python
+*.pyc
+*.pyo
+__pycache__/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Data sensitif (opsional — aktifkan jika perlu)
+# *.xlsx
+# *.csv
