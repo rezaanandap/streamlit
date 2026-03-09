@@ -1,25 +1,17 @@
 # ============================================================
 #  DASHBOARD REKAP DATA PEMILIH — SULAWESI BARAT
-#  100% DINAMIS: periode baru di data → otomatis muncul di chart
+#  Cara update data: ganti file Excel di repo → git push
 #  Jalankan : streamlit run dashboard_pemilih.py
 #  Install  : pip install streamlit pandas plotly openpyxl
-#
-#  PASSWORD SETUP — buat file .streamlit/secrets.toml:
-#    [auth]
-#    upload_password = "passwordkamu"
-#    admin_name      = "Nama Kamu"
 # ============================================================
 
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import hashlib
-import os
-from pathlib import Path
 import io
+from pathlib import Path
 
-# ── Page Config ──────────────────────────────────────────────
 st.set_page_config(
     page_title="Dashboard Pemilih Sulbar",
     page_icon="🗳️",
@@ -33,8 +25,9 @@ st.markdown("""
 html, body, [class*="css"] { font-family: 'Plus Jakarta Sans', sans-serif; }
 .main { background-color: #0a0f1e; }
 .block-container { padding: 1.2rem 2rem 2rem; }
-.kpi { background:linear-gradient(145deg,#111827,#0f1f38); border:1px solid #1f3358;
-       border-radius:14px; padding:1.1rem 1.3rem; height:100%; }
+.kpi { background:linear-gradient(145deg,#111827,#0f1f38);
+       border:1px solid #1f3358; border-radius:14px;
+       padding:1.1rem 1.3rem; height:100%; }
 .kpi-label { font-size:.72rem; color:#64748b; text-transform:uppercase; letter-spacing:.08em; }
 .kpi-value { font-size:1.55rem; font-weight:800; color:#f0f4ff; margin:.2rem 0 .1rem; line-height:1.1; }
 .kpi-sub   { font-size:.74rem; color:#475569; }
@@ -48,8 +41,7 @@ hr { border-color:#1e293b !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Warna dinamis ─────────────────────────────────────────────
-# Pool warna — otomatis dipakai berurutan untuk setiap periode baru
+# ── Warna & Helpers ───────────────────────────────────────────
 COLOR_POOL = [
     "#3b82f6","#a78bfa","#34d399","#fb923c",
     "#f472b6","#facc15","#22d3ee","#f87171",
@@ -57,20 +49,11 @@ COLOR_POOL = [
 ]
 PAL_GENDER = {"P": "#f472b6", "L": "#3b82f6"}
 
-def build_period_meta(periods: list[str]) -> dict:
-    """
-    Buat label & warna otomatis dari daftar kode periode di data.
-    Tidak ada hardcode — semua dari data.
-    """
-    meta = {}
-    for i, kode in enumerate(periods):
-        # Label: ganti underscore → spasi, title-case
-        label = kode.replace("_", " ").title()
-        color = COLOR_POOL[i % len(COLOR_POOL)]
-        meta[kode] = {"label": label, "color": color}
-    return meta
+def build_period_meta(periods):
+    return {k: {"label": k.replace("_"," ").title(),
+                "color": COLOR_POOL[i % len(COLOR_POOL)]}
+            for i, k in enumerate(periods)}
 
-# ── Plotly theme ──────────────────────────────────────────────
 T_BASE = dict(
     paper_bgcolor="#111827", plot_bgcolor="#111827",
     font=dict(family="Plus Jakarta Sans", color="#94a3b8", size=11),
@@ -84,132 +67,59 @@ def apply_theme(fig, height=360, **kwargs):
     fig.update_yaxes(gridcolor="#1f2d45", linecolor="#1f2d45", zeroline=False)
     return fig
 
-# ── Helpers ──────────────────────────────────────────────────
 def fmt(n):
     if n >= 1_000_000: return f"{n/1_000_000:.2f}M"
     if n >= 1_000:     return f"{n/1_000:.1f}K"
     return str(int(n))
 
-def safe_div(a, b):
-    return (a - b) / b * 100 if b else 0
+def safe_div(a, b): return (a - b) / b * 100 if b else 0
 
 def delta_html(pct):
     if pct > 0:   return f'<span class="kpi-delta-pos">▲ +{pct:.2f}%</span>'
     elif pct < 0: return f'<span class="kpi-delta-neg">▼ {pct:.2f}%</span>'
     return '<span style="color:#64748b">— 0%</span>'
 
-# ── Auth ──────────────────────────────────────────────────────
-def get_credentials():
-    try:
-        pwd  = st.secrets["auth"]["upload_password"]
-        name = st.secrets["auth"].get("admin_name", "Admin")
-    except Exception:
-        pwd, name = "admin123", "Admin"
-    return pwd, name
+# ── Load Data ─────────────────────────────────────────────────
+DATA_FILE = Path(__file__).parent / "rekap_perjalanan_data_frompemilu.xlsx"
 
-def hash_pw(pw): return hashlib.sha256(pw.encode()).hexdigest()
-def is_admin():  return st.session_state.get("is_admin", False)
-
-# ── Load & clean data ─────────────────────────────────────────
-def clean_df(df):
+@st.cache_data
+def load_data():
+    df = pd.read_excel(DATA_FILE)
     df.columns = [c.strip().lower() for c in df.columns]
     df["kabupaten"] = df["kabupaten"].str.strip().str.title()
     return df
 
-@st.cache_data
-def load_bytes(raw_bytes, fname):
-    return clean_df(pd.read_excel(io.BytesIO(raw_bytes)))
+if not DATA_FILE.exists():
+    st.error(
+        "⚠️ File data tidak ditemukan!\n\n"
+        f"Pastikan file **{DATA_FILE.name}** ada di folder yang sama "
+        "dengan `dashboard_pemilih.py` di repository GitHub."
+    )
+    st.stop()
 
-# Cari file data di folder yang sama dengan script ini
-# Ini memastikan path benar baik di lokal maupun Streamlit Cloud
-BASE_DIR  = Path(__file__).parent
-DATA_FILE = BASE_DIR / "rekap_perjalanan_data_frompemilu.xlsx"
+df = load_data()
 
-@st.cache_data
-def load_default():
-    if not DATA_FILE.exists():
-        return None
-    return clean_df(pd.read_excel(DATA_FILE))
+# ── Bangun metadata periode dari data ─────────────────────────
+all_periods = list(dict.fromkeys(df["keterangan"].tolist()))
+PM          = build_period_meta(all_periods)
+p_label     = lambda k: PM.get(k, {}).get("label", k)
+p_color     = lambda k: PM.get(k, {}).get("color", "#94a3b8")
+pal_period  = {k: v["color"] for k, v in PM.items()}
+label_map   = {k: v["label"] for k, v in PM.items()}
 
 # ════════════════════════════════════════════════════════════
-#  SIDEBAR
+#  SIDEBAR — hanya filter, tanpa login/upload
 # ════════════════════════════════════════════════════════════
 with st.sidebar:
     st.markdown("## 🗳️ Dashboard Pemilih\n##### Sulawesi Barat")
     st.markdown("---")
-
-    if is_admin():
-        admin_name = st.session_state.get("admin_name", "Admin")
-        st.markdown(f"### ✅ Login sebagai **{admin_name}**")
-        if st.button("🚪 Logout", use_container_width=True):
-            for k in ["is_admin","admin_name","uploaded_data","uploaded_fname"]:
-                st.session_state.pop(k, None)
-            st.rerun()
-        st.markdown("### 📁 Upload Data")
-        uploaded = st.file_uploader("File Excel", type=["xlsx","xls"],
-                                    label_visibility="collapsed")
-        if uploaded:
-            st.session_state["uploaded_data"]  = uploaded.read()
-            st.session_state["uploaded_fname"] = uploaded.name
-            st.success(f"✅ **{uploaded.name}**")
-    else:
-        st.markdown("### 📁 Data")
-        st.info("👁 Mode publik — hanya bisa melihat.")
-        st.markdown("---")
-        st.markdown("### 🔐 Admin Login")
-        pw_input = st.text_input("Password", type="password",
-                                 placeholder="Masukkan password...", key="pw_input")
-        if st.button("🔑 Login", use_container_width=True):
-            correct_pw, admin_name = get_credentials()
-            if hash_pw(pw_input) == hash_pw(correct_pw):
-                st.session_state["is_admin"]   = True
-                st.session_state["admin_name"] = admin_name
-                st.rerun()
-            else:
-                st.error("❌ Password salah!")
-
-    st.markdown("---")
-
-    # ── Resolve data ─────────────────────────────────────────
-    # Prioritas: (1) file yg diupload admin, (2) file bawaan di repo
-    if "uploaded_data" in st.session_state:
-        df = load_bytes(st.session_state["uploaded_data"],
-                        st.session_state["uploaded_fname"])
-        st.caption(f"📂 {st.session_state['uploaded_fname']}")
-    else:
-        df = load_default()
-        if df is not None:
-            st.caption("📌 Menampilkan data bawaan dari repo")
-        else:
-            # Tidak ada file bawaan dan belum ada upload
-            st.error(
-                "⚠️ File data tidak ditemukan!\n\n"
-                "Pastikan file **rekap_perjalanan_data_frompemilu.xlsx** "
-                "ada di folder yang sama dengan `dashboard_pemilih.py` "
-                "di repository GitHub kamu."
-            )
-            st.stop()
-
-    # ── Bangun metadata periode dari data aktual ──────────────
-    # Urutan periode diambil dari urutan kemunculan di data (agar konsisten)
-    all_periods_in_data = list(dict.fromkeys(df["keterangan"].tolist()))
-    PM = build_period_meta(all_periods_in_data)  # PM = Period Meta
-
-    def p_label(kode): return PM.get(kode, {}).get("label", kode)
-    def p_color(kode): return PM.get(kode, {}).get("color", "#94a3b8")
-
-    pal_period  = {k: v["color"] for k,v in PM.items()}
-    label_map   = {k: v["label"] for k,v in PM.items()}
-
-    # ── Filter ───────────────────────────────────────────────
     st.markdown("### 🔍 Filter")
+
     all_kab = sorted(df["kabupaten"].unique())
     sel_kab = st.multiselect("Kabupaten", all_kab, default=all_kab)
 
     sel_period = st.multiselect(
-        "Periode",
-        options=all_periods_in_data,
-        default=all_periods_in_data,
+        "Periode", options=all_periods, default=all_periods,
         format_func=p_label
     )
 
@@ -219,57 +129,47 @@ with st.sidebar:
     )
 
     st.markdown("---")
-
-    # ── Info: periode yang terdeteksi ─────────────────────────
     st.markdown("### 📋 Periode Terdeteksi")
-    for kode in all_periods_in_data:
-        col_dot, col_lbl = st.columns([1, 5])
-        col_dot.markdown(
+    for kode in all_periods:
+        c1, c2 = st.columns([1, 5])
+        c1.markdown(
             f"<div style='width:12px;height:12px;border-radius:50%;"
             f"background:{p_color(kode)};margin-top:4px'></div>",
             unsafe_allow_html=True
         )
-        col_lbl.caption(p_label(kode))
+        c2.caption(p_label(kode))
 
     st.markdown("---")
     show_table = st.checkbox("Tampilkan Tabel Data", False)
 
-# ── Apply filter ─────────────────────────────────────────────
+# ── Filter ────────────────────────────────────────────────────
 fdf = df[
     df["kabupaten"].isin(sel_kab) &
     df["keterangan"].isin(sel_period) &
     df["jenis_kelamin"].isin(sel_jk)
 ].copy()
 
-# Periode yang aktif setelah filter (urutan tetap)
-active_periods = [p for p in all_periods_in_data if p in fdf["keterangan"].unique()]
+active_periods = [p for p in all_periods if p in fdf["keterangan"].unique()]
 
 # ════════════════════════════════════════════════════════════
 #  HEADER
 # ════════════════════════════════════════════════════════════
 st.markdown("# 🗳️ Rekap Data Pemilih — Sulawesi Barat")
-tren_str = " → ".join([p_label(p) for p in all_periods_in_data])
+tren_str = " → ".join([p_label(p) for p in all_periods])
 st.caption(f"Perjalanan data: {tren_str}")
 st.markdown("---")
 
-# ════════════════════════════════════════════════════════════
-#  KPI — DINAMIS: jumlah kartu = jumlah periode + 1 total
-# ════════════════════════════════════════════════════════════
-totals = {p: df[df["keterangan"]==p]["jumlah_pemilih"].sum()
-          for p in all_periods_in_data}
+# ── KPI ───────────────────────────────────────────────────────
+totals  = {p: df[df["keterangan"]==p]["jumlah_pemilih"].sum() for p in all_periods}
+total_f = fdf["jumlah_pemilih"].sum()
+total_l = fdf[fdf["jenis_kelamin"]=="L"]["jumlah_pemilih"].sum()
+total_p = fdf[fdf["jenis_kelamin"]=="P"]["jumlah_pemilih"].sum()
 
-total_f  = fdf["jumlah_pemilih"].sum()
-total_l  = fdf[fdf["jenis_kelamin"]=="L"]["jumlah_pemilih"].sum()
-total_pr = fdf[fdf["jenis_kelamin"]=="P"]["jumlah_pemilih"].sum()
+n_cols   = min(len(all_periods) + 1, 6)
+kpi_cols = st.columns(n_cols)
 
-# Tampilkan maks 5 kartu (4 periode + 1 total filter)
-# Jika periode > 4 kartu tetap tampil semua via baris kedua
-kpi_periods = all_periods_in_data
-n_cols      = min(len(kpi_periods) + 1, 6)  # max 6 kolom
-kpi_cols    = st.columns(n_cols)
-
-for i, kode in enumerate(kpi_periods[:n_cols-1]):
-    prev = kpi_periods[i-1] if i > 0 else None
+for i, kode in enumerate(all_periods[:n_cols-1]):
+    prev = all_periods[i-1] if i > 0 else None
     dlt  = delta_html(safe_div(totals[kode], totals[prev])) if prev else ""
     sub  = f"vs {p_label(prev)}" if prev else "Baseline awal"
     kpi_cols[i].markdown(f"""<div class="kpi">
@@ -278,26 +178,23 @@ for i, kode in enumerate(kpi_periods[:n_cols-1]):
         <div class="kpi-sub">{sub}</div>{dlt}
     </div>""", unsafe_allow_html=True)
 
-# Kartu terakhir = total filter
 kpi_cols[-1].markdown(f"""<div class="kpi">
     <div class="kpi-label">Total (Filter Aktif)</div>
     <div class="kpi-value">{fmt(total_f)}</div>
-    <div class="kpi-sub">♂ {fmt(total_l)}  ♀ {fmt(total_pr)}</div>
+    <div class="kpi-sub">♂ {fmt(total_l)}  ♀ {fmt(total_p)}</div>
 </div>""", unsafe_allow_html=True)
 
 # Baris kedua jika periode > 5
-extra_periods = kpi_periods[n_cols-1:]
-if extra_periods:
-    extra_cols = st.columns(len(extra_periods))
-    for i, kode in enumerate(extra_periods):
-        idx  = kpi_periods.index(kode)
-        prev = kpi_periods[idx-1] if idx > 0 else None
+extra = all_periods[n_cols-1:]
+if extra:
+    for i, kode in zip(st.columns(len(extra)), extra):
+        idx  = all_periods.index(kode)
+        prev = all_periods[idx-1] if idx > 0 else None
         dlt  = delta_html(safe_div(totals[kode], totals[prev])) if prev else ""
-        sub  = f"vs {p_label(prev)}" if prev else "Baseline awal"
-        extra_cols[i].markdown(f"""<div class="kpi">
+        i.markdown(f"""<div class="kpi">
             <div class="kpi-label">{p_label(kode)}</div>
             <div class="kpi-value">{fmt(totals[kode])}</div>
-            <div class="kpi-sub">{sub}</div>{dlt}
+            <div class="kpi-sub">vs {p_label(prev) if prev else '-'}</div>{dlt}
         </div>""", unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
@@ -312,21 +209,18 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "📈 Tren Perubahan",
 ])
 
-# ── TAB 1: Perbandingan Periode ──────────────────────────────
+# ── TAB 1 ────────────────────────────────────────────────────
 with tab1:
     c1, c2 = st.columns(2)
-
     with c1:
         st.markdown("#### Total Pemilih per Periode")
         agg = (fdf.groupby("keterangan")["jumlah_pemilih"].sum()
                .reindex(active_periods).reset_index())
         agg["label"] = agg["keterangan"].map(label_map)
-
         fig = go.Figure(go.Bar(
             x=agg["label"], y=agg["jumlah_pemilih"],
             marker_color=[p_color(k) for k in agg["keterangan"]],
-            text=agg["jumlah_pemilih"].apply(fmt),
-            textposition="outside",
+            text=agg["jumlah_pemilih"].apply(fmt), textposition="outside",
             hovertemplate="%{x}<br>%{y:,.0f} pemilih<extra></extra>",
         ))
         apply_theme(fig, 340, yaxis_title="Jumlah Pemilih", xaxis_title="")
@@ -343,27 +237,23 @@ with tab1:
 
     st.markdown("#### Perbandingan Antar Periode per Kabupaten")
     agg_kab = fdf.groupby(["kabupaten","keterangan"])["jumlah_pemilih"].sum().reset_index()
-    agg_kab["label"] = agg_kab["keterangan"].map(label_map)
     fig3 = px.bar(agg_kab, x="kabupaten", y="jumlah_pemilih",
-                  color="keterangan", barmode="group",
-                  color_discrete_map=pal_period,
+                  color="keterangan", barmode="group", color_discrete_map=pal_period,
                   labels={"jumlah_pemilih":"Jumlah Pemilih","kabupaten":"","keterangan":"Periode"})
     for trace in fig3.data:
         trace.name = label_map.get(trace.name, trace.name)
     apply_theme(fig3, 380, xaxis_title="", yaxis_title="Jumlah Pemilih", legend_title="Periode")
     st.plotly_chart(fig3, use_container_width=True)
 
-# ── TAB 2: Analisis Gender ───────────────────────────────────
+# ── TAB 2 ────────────────────────────────────────────────────
 with tab2:
     c1, c2 = st.columns(2)
-
     with c1:
         st.markdown("#### Total L vs P per Periode")
         agg_jk = fdf.groupby(["keterangan","jenis_kelamin"])["jumlah_pemilih"].sum().reset_index()
         agg_jk["label_p"] = agg_jk["keterangan"].map(label_map)
         fig4 = px.bar(agg_jk, x="label_p", y="jumlah_pemilih",
-                      color="jenis_kelamin", barmode="group",
-                      color_discrete_map=PAL_GENDER,
+                      color="jenis_kelamin", barmode="group", color_discrete_map=PAL_GENDER,
                       text=agg_jk["jumlah_pemilih"].apply(fmt),
                       labels={"label_p":"","jumlah_pemilih":"Jumlah","jenis_kelamin":"Gender"})
         fig4.update_traces(textposition="outside")
@@ -381,7 +271,6 @@ with tab2:
         pivot["pct_L"] = pivot.get("L", 0) / pivot["total"] * 100
         pivot["pct_P"] = pivot.get("P", 0) / pivot["total"] * 100
         pivot = pivot.sort_values("total", ascending=True)
-
         fig5 = go.Figure()
         fig5.add_trace(go.Bar(
             y=pivot["kabupaten"], x=pivot["pct_L"], name="Laki-laki",
@@ -405,10 +294,8 @@ with tab2:
                                values="jumlah_pemilih", fill_value=0).reset_index()
     if "L" in pivot2.columns and "P" in pivot2.columns:
         pivot2["selisih"] = pivot2["L"] - pivot2["P"]
-        pivot2["label"]   = pivot2["keterangan"].map(label_map)
         fig6 = px.bar(pivot2, x="kabupaten", y="selisih",
-                      color="keterangan", barmode="group",
-                      color_discrete_map=pal_period,
+                      color="keterangan", barmode="group", color_discrete_map=pal_period,
                       labels={"selisih":"Selisih (L−P)","kabupaten":""},
                       title="Positif = Laki-laki lebih banyak  |  Negatif = Perempuan lebih banyak")
         fig6.add_hline(y=0, line_color="#ffffff", line_width=1, opacity=0.3)
@@ -417,9 +304,9 @@ with tab2:
         apply_theme(fig6, 360, xaxis_title="", legend_title="Periode")
         st.plotly_chart(fig6, use_container_width=True)
 
-# ── TAB 3: Per Kabupaten ─────────────────────────────────────
+# ── TAB 3 ────────────────────────────────────────────────────
 with tab3:
-    st.markdown("#### Total Pemilih per Kabupaten (Semua Periode)")
+    st.markdown("#### Total Pemilih per Kabupaten")
     agg_k = (fdf.groupby("kabupaten")["jumlah_pemilih"].sum()
              .reset_index().sort_values("jumlah_pemilih", ascending=True))
     fig7 = go.Figure(go.Bar(
@@ -461,8 +348,7 @@ with tab3:
     hm = fdf.groupby(["kabupaten","keterangan"])["jumlah_pemilih"].sum().reset_index()
     hm_pivot = hm.pivot(index="kabupaten", columns="keterangan",
                         values="jumlah_pemilih").fillna(0)
-    # Urutkan kolom sesuai urutan periode di data
-    ordered_cols = [p for p in all_periods_in_data if p in hm_pivot.columns]
+    ordered_cols = [p for p in all_periods if p in hm_pivot.columns]
     hm_pivot = hm_pivot[ordered_cols]
     hm_pivot.columns = [label_map.get(c, c) for c in hm_pivot.columns]
     fig10 = px.imshow(hm_pivot,
@@ -471,46 +357,35 @@ with tab3:
     apply_theme(fig10, 320, xaxis_title="Periode", yaxis_title="Kabupaten")
     st.plotly_chart(fig10, use_container_width=True)
 
-# ── TAB 4: Tren Perubahan ────────────────────────────────────
+# ── TAB 4 ────────────────────────────────────────────────────
 with tab4:
     st.markdown("#### Tren Pertumbuhan Pemilih per Kabupaten")
     tren = fdf.groupby(["kabupaten","keterangan"])["jumlah_pemilih"].sum().reset_index()
     tren["label"] = tren["keterangan"].map(label_map)
-    # Urutkan sesuai urutan periode di data
-    order_map = {k: i for i, k in enumerate(all_periods_in_data)}
-    tren["order"] = tren["keterangan"].map(order_map)
+    tren["order"] = tren["keterangan"].map({k:i for i,k in enumerate(all_periods)})
     tren = tren.sort_values("order")
-
-    fig11 = px.line(tren, x="label", y="jumlah_pemilih",
-                    color="kabupaten", markers=True,
-                    color_discrete_sequence=COLOR_POOL,
+    fig11 = px.line(tren, x="label", y="jumlah_pemilih", color="kabupaten",
+                    markers=True, color_discrete_sequence=COLOR_POOL,
                     labels={"label":"","jumlah_pemilih":"Jumlah Pemilih","kabupaten":"Kabupaten"})
     fig11.update_traces(line_width=2.2, marker_size=9)
     apply_theme(fig11, 380, hovermode="x unified")
     st.plotly_chart(fig11, use_container_width=True)
 
-    # Persentase perubahan — dinamis: semua pasangan periode berurutan
     st.markdown("#### Persentase Perubahan Antar Periode")
-    # Buat pasangan otomatis: (period[0]→period[1]), (period[1]→period[2]), dst
-    pairs = []
-    for i in range(len(active_periods) - 1):
-        p1, p2 = active_periods[i], active_periods[i+1]
-        lbl = f"{p_label(p1)} → {p_label(p2)}"
-        pairs.append((p1, p2, lbl))
-
+    pairs = [(active_periods[i], active_periods[i+1],
+              f"{p_label(active_periods[i])} → {p_label(active_periods[i+1])}")
+             for i in range(len(active_periods)-1)]
     pct_rows = []
     for kab in sorted(fdf["kabupaten"].unique()):
         for p1, p2, lbl in pairs:
             v1 = fdf[(fdf["kabupaten"]==kab)&(fdf["keterangan"]==p1)]["jumlah_pemilih"].sum()
             v2 = fdf[(fdf["kabupaten"]==kab)&(fdf["keterangan"]==p2)]["jumlah_pemilih"].sum()
             if v1 > 0:
-                pct_rows.append({"Kabupaten":kab, "Perubahan":lbl, "Persen":(v2-v1)/v1*100})
-
-    pct_df = pd.DataFrame(pct_rows)
-    if not pct_df.empty:
+                pct_rows.append({"Kabupaten":kab,"Perubahan":lbl,"Persen":(v2-v1)/v1*100})
+    if pct_rows:
+        pct_df = pd.DataFrame(pct_rows)
         fig12 = px.bar(pct_df, x="Kabupaten", y="Persen", color="Perubahan",
-                       barmode="group",
-                       color_discrete_sequence=COLOR_POOL,
+                       barmode="group", color_discrete_sequence=COLOR_POOL,
                        text=pct_df["Persen"].round(2).astype(str)+"%",
                        labels={"Persen":"Perubahan (%)"})
         fig12.add_hline(y=0, line_color="#ffffff", line_width=1, opacity=0.3)
@@ -518,37 +393,34 @@ with tab4:
         apply_theme(fig12, 380, xaxis_title="", yaxis_title="Persentase Perubahan (%)")
         st.plotly_chart(fig12, use_container_width=True)
 
-    # Tabel ringkas — dinamis: kolom = semua periode yang ada
-    st.markdown("#### Tabel Ringkas Perubahan Jumlah Pemilih")
-    summary_rows = []
+    st.markdown("#### Tabel Ringkas")
+    rows = []
     for kab in sorted(df["kabupaten"].unique()):
         row = {"Kabupaten": kab}
-        for kode in all_periods_in_data:
+        for kode in all_periods:
             v = df[(df["kabupaten"]==kab)&(df["keterangan"]==kode)]["jumlah_pemilih"].sum()
             row[p_label(kode)] = f"{v:,.0f}"
-        # Delta: periode pertama → periode terakhir
-        if len(all_periods_in_data) >= 2:
-            p_first, p_last = all_periods_in_data[0], all_periods_in_data[-1]
-            v_first = df[(df["kabupaten"]==kab)&(df["keterangan"]==p_first)]["jumlah_pemilih"].sum()
-            v_last  = df[(df["kabupaten"]==kab)&(df["keterangan"]==p_last)]["jumlah_pemilih"].sum()
-            if v_first > 0:
-                d = (v_last - v_first) / v_first * 100
-                lbl_delta = f"Δ {p_label(p_first)}→{p_label(p_last)} (%)"
-                row[lbl_delta] = f"+{d:.2f}%" if d >= 0 else f"{d:.2f}%"
-        summary_rows.append(row)
-
-    st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
+        if len(all_periods) >= 2:
+            p0, pN = all_periods[0], all_periods[-1]
+            v0 = df[(df["kabupaten"]==kab)&(df["keterangan"]==p0)]["jumlah_pemilih"].sum()
+            vN = df[(df["kabupaten"]==kab)&(df["keterangan"]==pN)]["jumlah_pemilih"].sum()
+            if v0 > 0:
+                d = (vN-v0)/v0*100
+                row[f"Δ {p_label(p0)}→{p_label(pN)} (%)"] = f"+{d:.2f}%" if d>=0 else f"{d:.2f}%"
+        rows.append(row)
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 # ── TABEL DATA ────────────────────────────────────────────────
 if show_table:
     st.markdown("---")
-    st.markdown(f"### 📋 Data Lengkap ({len(fdf)} baris)")
+    st.markdown(f"### 📋 Data ({len(fdf)} baris)")
     disp = fdf.copy()
     disp["jumlah_pemilih"] = disp["jumlah_pemilih"].apply(lambda x: f"{x:,.0f}")
     disp["keterangan"]    = disp["keterangan"].map(label_map)
     disp["jenis_kelamin"] = disp["jenis_kelamin"].map({"L":"Laki-laki","P":"Perempuan"})
     st.dataframe(
-        disp[["kabupaten","jumlah_kec","jumlah_kel_desa","jenis_kelamin","keterangan","jumlah_pemilih"]]
+        disp[["kabupaten","jumlah_kec","jumlah_kel_desa",
+              "jenis_kelamin","keterangan","jumlah_pemilih"]]
         .rename(columns={"kabupaten":"Kabupaten","jumlah_kec":"Kecamatan",
                          "jumlah_kel_desa":"Kel/Desa","jenis_kelamin":"Gender",
                          "keterangan":"Periode","jumlah_pemilih":"Jumlah Pemilih"}),
@@ -567,8 +439,7 @@ if show_table:
 
 # ── FOOTER ────────────────────────────────────────────────────
 st.markdown("---")
-n_p = len(all_periods_in_data)
 st.markdown(f"""<div style='text-align:center;color:#334155;font-size:.78rem'>
     🗳️ Dashboard Rekap Data Pemilih Sulawesi Barat &nbsp;·&nbsp;
-    {n_p} periode terdeteksi &nbsp;·&nbsp; {tren_str}
+    {len(all_periods)} periode &nbsp;·&nbsp; {tren_str}
 </div>""", unsafe_allow_html=True)
