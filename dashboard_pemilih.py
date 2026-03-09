@@ -15,6 +15,8 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import hashlib
+import os
+from pathlib import Path
 import io
 
 # ── Page Config ──────────────────────────────────────────────
@@ -118,9 +120,16 @@ def clean_df(df):
 def load_bytes(raw_bytes, fname):
     return clean_df(pd.read_excel(io.BytesIO(raw_bytes)))
 
+# Cari file data di folder yang sama dengan script ini
+# Ini memastikan path benar baik di lokal maupun Streamlit Cloud
+BASE_DIR  = Path(__file__).parent
+DATA_FILE = BASE_DIR / "rekap_perjalanan_data_frompemilu.xlsx"
+
 @st.cache_data
 def load_default():
-    return clean_df(pd.read_excel("rekap_perjalanan_data_frompemilu.xlsx"))
+    if not DATA_FILE.exists():
+        return None
+    return clean_df(pd.read_excel(DATA_FILE))
 
 # ════════════════════════════════════════════════════════════
 #  SIDEBAR
@@ -162,16 +171,23 @@ with st.sidebar:
     st.markdown("---")
 
     # ── Resolve data ─────────────────────────────────────────
+    # Prioritas: (1) file yg diupload admin, (2) file bawaan di repo
     if "uploaded_data" in st.session_state:
         df = load_bytes(st.session_state["uploaded_data"],
                         st.session_state["uploaded_fname"])
+        st.caption(f"📂 {st.session_state['uploaded_fname']}")
     else:
-        try:
-            df = load_default()
-            if not is_admin():
-                st.caption("📌 Menampilkan data bawaan")
-        except Exception:
-            st.warning("⚠️ Belum ada data. Login & upload file dulu.")
+        df = load_default()
+        if df is not None:
+            st.caption("📌 Menampilkan data bawaan dari repo")
+        else:
+            # Tidak ada file bawaan dan belum ada upload
+            st.error(
+                "⚠️ File data tidak ditemukan!\n\n"
+                "Pastikan file **rekap_perjalanan_data_frompemilu.xlsx** "
+                "ada di folder yang sama dengan `dashboard_pemilih.py` "
+                "di repository GitHub kamu."
+            )
             st.stop()
 
     # ── Bangun metadata periode dari data aktual ──────────────
